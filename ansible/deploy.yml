@@ -1,0 +1,71 @@
+---
+- name: Deploy Grafana
+  hosts: containers
+
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+
+  tasks:
+    - name: Install prerequisite packages
+      apt:
+        name:
+          - apt-transport-https
+          - software-properties-common
+          - wget
+          - gnupg
+        state: present
+        update_cache: yes
+
+    - name: Add Grafana GPG key
+      shell: >-
+        wget -q -O - https://apt.grafana.com/gpg.key |
+        gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
+      args:
+        creates: /etc/apt/keyrings/grafana.gpg
+
+    - name: Ensure keyrings directory exists
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Add Grafana stable repo
+      copy:
+        content: "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main\n"
+        dest: /etc/apt/sources.list.d/grafana.list
+        mode: '0644'
+
+    - name: Install Grafana OSS
+      apt:
+        name: grafana
+        state: present
+        update_cache: yes
+
+    - name: Set Grafana admin credentials to container user
+      lineinfile:
+        path: /etc/grafana/grafana.ini
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        insertafter: "\\[security\\]"
+      loop:
+        - { regexp: '^;?admin_user ', line: 'admin_user = {{ container_user_name }}' }
+        - { regexp: '^;?admin_password ', line: 'admin_password = {{ container_user_password }}' }
+
+    - name: Enable and start Grafana
+      systemd:
+        name: grafana-server
+        enabled: yes
+        state: started
+
+    - name: Wait for Grafana to be ready
+      uri:
+        url: "http://localhost:3000/api/health"
+        status_code: 200
+      register: grafana_health
+      retries: 12
+      delay: 5
+      until: grafana_health.status == 200
+
+    - name: Display success message
+      debug:
+        msg: "Grafana is running at http://{{ ansible_default_ipv4.address }}:3000 — login with {{ container_user_name }} / {{ container_user_password }}"
